@@ -91,6 +91,16 @@ def install(app):
             # Do not print exception locals, request bodies, headers or SQL parameters.
             logging.error('Unhandled API error request_id=%s', rid)
             response = JSONResponse(status_code=500, content={'detail': '서버 오류가 발생했습니다.'})
+        if not hasattr(request.state, 'actor_id'):
+            # A valid customer denied at a staff endpoint is still an identifiable actor.
+            # Revalidate against the DB; never trust unsigned claims for audit identity.
+            scheme, _, token = request.headers.get('Authorization', '').partition(' ')
+            if scheme.lower() == 'bearer' and token:
+                try:
+                    credentials = core.HTTPAuthorizationCredentials(scheme='Bearer', credentials=token)
+                    await run_in_threadpool(current_actor, request, credentials)
+                except (HTTPException, psycopg.Error):
+                    pass
         route = request.scope.get('route')
         # Route templates prevent arbitrary secrets in a path/query entering the log.
         path = getattr(route, 'path', '/api/unmatched')

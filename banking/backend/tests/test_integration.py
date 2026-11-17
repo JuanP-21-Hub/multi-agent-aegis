@@ -163,6 +163,10 @@ class IntegrationTests(unittest.TestCase):
         cid, _, h = self.customer()
         r = self.client.get('/api/customers/me?password=not-for-logs', headers=h)
         self.assertEqual(r.headers['X-Audit-Persisted'], 'true')
+        denied = self.client.get('/api/staff/customers', headers=h)
+        with m.get_db() as conn, conn.cursor() as cur:
+            cur.execute('SELECT actor_type, actor_id, http_status FROM audit_logs WHERE request_id=%s', (denied.headers['X-Request-ID'],))
+            self.assertEqual(cur.fetchone(), ('CUSTOMER', cid, 403))
         with m.get_db() as conn, conn.cursor() as cur:
             cur.execute('SELECT actor_id, http_status, request_path FROM audit_logs WHERE request_id=%s', (r.headers['X-Request-ID'],))
             self.assertEqual(cur.fetchone(), (cid, 200, '/api/customers/me'))

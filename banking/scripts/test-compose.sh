@@ -20,10 +20,18 @@ dc run --rm --no-deps backend sh -c 'pip install --no-cache-dir -r requirements-
 python3 tests/smoke.py before
 export SMOKE_STAFF_ID="browser_staff_$$"
 export SMOKE_STAFF_PASSWORD="$(openssl rand -hex 24)"
-dc exec -T -e SMOKE_STAFF_ID -e SMOKE_STAFF_PASSWORD backend python tests/bootstrap_browser.py
+dc exec -T -e SMOKE_STAFF_ID -e SMOKE_STAFF_PASSWORD backend python -m tests.bootstrap_browser
 npm install --prefix tests/browser --ignore-scripts --no-audit --no-fund
 node tests/browser/node_modules/playwright/cli.js install --with-deps chromium
 node tests/browser/smoke.cjs
+python3 tests/bola_http.py fixed
+export LAB_MODE=vulnerable
+dc up -d --force-recreate backend
+dc up -d --force-recreate --wait web
+python3 tests/bola_http.py vulnerable
+export LAB_MODE=fixed
+dc up -d --force-recreate backend
+dc up -d --force-recreate --wait web
 dc restart database backend web
 dc up -d --wait
 python3 tests/smoke.py after

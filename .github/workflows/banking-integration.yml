@@ -1,0 +1,19 @@
+name: Banking integration
+on:
+  push:
+    branches: ['integration/fastapi-a2d-bank-20261117']
+    paths: ['banking/**', '.github/workflows/banking-integration.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: PostgreSQL migration, API, Nginx and restart tests
+        run: bash banking/scripts/test-compose.sh

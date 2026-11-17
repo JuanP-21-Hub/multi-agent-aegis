@@ -1,0 +1,5 @@
+# Explicitly attach an existing PostgreSQL 17 volume; never create a lookalike empty volume.
+volumes:
+  bank_data:
+    external: true
+    name: ${BANK_DATA_VOLUME:?Set the exact existing bank_data volume name}

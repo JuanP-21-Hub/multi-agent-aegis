@@ -4,13 +4,13 @@ import secrets
 import psycopg
 from argon2 import PasswordHasher
 from cryptography.fernet import Fernet
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Query
 from pydantic import BaseModel, Field, field_validator
 
 
 app = FastAPI(
     title="FinLab Banking API",
-    version="0.2.0"
+    version="0.3.0"
 )
 
 password_hasher = PasswordHasher()
@@ -24,6 +24,7 @@ rrn_cipher = Fernet(
 def get_db():
     return psycopg.connect(
         host=os.environ["DB_HOST"],
+        port=int(os.getenv("DB_PORT", "5432")),
         dbname=os.environ["DB_NAME"],
         user=os.environ["DB_USER"],
         password=os.environ["DB_PASSWORD"],
@@ -157,8 +158,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # 로그인 요청 데이터
 class LoginRequest(BaseModel):
-    login_id: str
-    password: str
+    login_id: str = Field(min_length=1, max_length=50)
+    password: str = Field(min_length=1, max_length=128)
 
 
 # 로그인 성공 응답 데이터
@@ -190,6 +191,7 @@ def authentication_error():
 
 # JWT 검증 및 로그인 고객 확인
 def get_current_customer(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None
     = Depends(bearer_scheme)
 ):
@@ -210,7 +212,7 @@ def get_current_customer(
         )
 
         if payload.get("role") != "CUSTOMER":
-            raise authentication_error()
+            raise HTTPException(403, "고객 전용 기능입니다.")
 
         customer_id = int(payload["sub"])
 
@@ -226,7 +228,7 @@ def get_current_customer(
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, login_id, full_name
+                    SELECT id, login_id, full_name, token_version
                     FROM customers
                     WHERE id = %s
                     """,
@@ -241,8 +243,11 @@ def get_current_customer(
             detail="Database operation failed"
         )
 
-    if customer is None:
+    if customer is None or payload.get("ver", 0) != customer[3]:
         raise authentication_error()
+
+    request.state.actor_type = "CUSTOMER"
+    request.state.actor_id = customer_id
 
     return {
         "customer_id": customer[0],
@@ -259,7 +264,7 @@ def get_current_customer(
     "/api/auth/customer/login",
     response_model=LoginResponse
 )
-def customer_login(request: LoginRequest):
+def customer_login(request: LoginRequest, http_request: Request):
 
     try:
         with get_db() as conn:
@@ -268,7 +273,7 @@ def customer_login(request: LoginRequest):
                 # 로그인 아이디로 고객 검색
                 cur.execute(
                     """
-                    SELECT id, password_hash
+                    SELECT id, password_hash, token_version
                     FROM customers
                     WHERE login_id = %s
                     """,
@@ -306,12 +311,16 @@ def customer_login(request: LoginRequest):
             detail="아이디 또는 비밀번호가 올바르지 않습니다."
         )
 
+    http_request.state.actor_type = "CUSTOMER"
+    http_request.state.actor_id = customer_id
+
     # 로그인 성공: JWT 토큰 생성
     now = datetime.now(timezone.utc)
 
     token_payload = {
         "sub": str(customer_id),
         "role": "CUSTOMER",
+        "ver": customer[2],
         "iss": "finlab",
         "aud": "finlab-client",
         "iat": now,
@@ -511,8 +520,8 @@ def get_my_accounts(
 # ============================================
 
 class StaffLoginRequest(BaseModel):
-    employee_id: str
-    password: str
+    employee_id: str = Field(min_length=1, max_length=50)
+    password: str = Field(min_length=1, max_length=128)
 
 
 class StaffCustomerResponse(BaseModel):
@@ -524,6 +533,7 @@ class StaffCustomerResponse(BaseModel):
 
 # 직원 인증
 def get_current_staff(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None
     = Depends(bearer_scheme)
 ):
@@ -543,7 +553,7 @@ def get_current_staff(
         )
 
         if payload.get("role") not in ("STAFF", "ADMIN"):
-            raise authentication_error()
+            raise HTTPException(403, "직원 전용 기능입니다.")
 
         staff_id = int(payload["sub"])
 
@@ -558,7 +568,7 @@ def get_current_staff(
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, employee_id, role
+                    SELECT id, employee_id, role, active, token_version, display_name
                     FROM staff_users
                     WHERE id = %s
                     """,
@@ -572,10 +582,15 @@ def get_current_staff(
             detail="Database operation failed"
         )
 
-    if staff is None or staff[2] not in ("STAFF", "ADMIN"):
+    if (staff is None or staff[2] not in ("STAFF", "ADMIN")
+            or not staff[3] or payload.get("ver", 0) != staff[4]):
         raise authentication_error()
 
+    request.state.actor_type = staff[2]
+    request.state.actor_id = staff[0]
     return {
+        "display_name": staff[5],
+        "active": staff[3],
         "staff_id": staff[0],
         "employee_id": staff[1],
         "role": staff[2]
@@ -590,13 +605,13 @@ def get_current_staff(
     "/api/auth/staff/login",
     response_model=LoginResponse
 )
-def staff_login(request: StaffLoginRequest):
+def staff_login(request: StaffLoginRequest, http_request: Request):
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, password_hash, role
+                    SELECT id, password_hash, role, active, token_version
                     FROM staff_users
                     WHERE employee_id = %s
                     """,
@@ -615,7 +630,7 @@ def staff_login(request: StaffLoginRequest):
         detail="아이디 또는 비밀번호가 올바르지 않습니다."
     )
 
-    if staff is None:
+    if staff is None or not staff[3] or staff[2] not in ("STAFF", "ADMIN"):
         raise login_error
 
     try:
@@ -628,8 +643,11 @@ def staff_login(request: StaffLoginRequest):
 
     now = datetime.now(timezone.utc)
 
+    http_request.state.actor_type = staff[2]
+    http_request.state.actor_id = staff[0]
     payload = {
         "sub": str(staff[0]),
+        "ver": staff[4],
         "role": staff[2],
         "iss": "finlab",
         "aud": "finlab-client",
@@ -659,6 +677,8 @@ def staff_login(request: StaffLoginRequest):
     response_model=list[StaffCustomerResponse]
 )
 def staff_customers(
+    after_id: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     staff: dict = Depends(get_current_staff)
 ):
     try:
@@ -668,9 +688,10 @@ def staff_customers(
                     """
                     SELECT id, login_id, full_name, rrn_last4
                     FROM customers
+                    WHERE id > %s
                     ORDER BY id
-                    LIMIT 100
-                    """
+                    LIMIT %s
+                    """, (after_id, limit)
                 )
                 rows = cur.fetchall()
 
@@ -789,3 +810,9 @@ def staff_customer_accounts(
         }
         for row in rows
     ]
+
+
+# Integrated A2D UI APIs and request auditing.
+from app.extensions import install
+install(app)
+

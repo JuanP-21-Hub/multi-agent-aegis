@@ -1,0 +1,11 @@
+# Only used with an isolated Compose project. Never combine with compose.existing.yaml.
+services:
+  database:
+    environment:
+      POSTGRES_DB: banklab_test
+  migrate:
+    environment:
+      PGDATABASE: banklab_test
+  backend:
+    environment:
+      DB_NAME: banklab_test

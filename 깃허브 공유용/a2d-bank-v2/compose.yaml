@@ -1,0 +1,48 @@
+name: a2d-bank-v2
+services:
+  web:
+    image: nginx:stable-alpine
+    ports:
+      - "127.0.0.1:8081:80"
+    volumes:
+      - ./app/static:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [front]
+  backend:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://a2d:a2d_local_lab@db:5432/a2d
+      LAB_MODE: ${LAB_MODE:-fixed}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-DemoBank!2026}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [front, data]
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: a2d
+      POSTGRES_PASSWORD: a2d_local_lab
+      POSTGRES_DB: a2d
+    volumes:
+      - bank-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U a2d -d a2d"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [data]
+networks:
+  front:
+  data:
+    internal: true
+volumes:
+  bank-data:

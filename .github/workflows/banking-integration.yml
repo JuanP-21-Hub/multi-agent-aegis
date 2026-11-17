@@ -17,3 +17,8 @@ jobs:
           node-version: '22'
       - name: PostgreSQL migration, API, Nginx and restart tests
         run: bash banking/scripts/test-compose.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-screenshots
+          path: banking/test-results/*.png

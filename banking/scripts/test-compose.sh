@@ -18,6 +18,12 @@ dc exec -T database psql -U bank_admin -d banklab_test -v ON_ERROR_STOP=1 < test
 dc up -d --build --wait
 dc run --rm --no-deps backend sh -c 'pip install --no-cache-dir -r requirements-test.txt && python -m unittest discover -s tests -v'
 python3 tests/smoke.py before
+export SMOKE_STAFF_ID="browser_staff_$$"
+export SMOKE_STAFF_PASSWORD="$(openssl rand -hex 24)"
+dc exec -T -e SMOKE_STAFF_ID -e SMOKE_STAFF_PASSWORD backend python tests/bootstrap_browser.py
+npm install --prefix tests/browser --ignore-scripts --no-audit --no-fund
+node tests/browser/node_modules/playwright/cli.js install --with-deps chromium
+node tests/browser/smoke.cjs
 dc restart database backend web
 dc up -d --wait
 python3 tests/smoke.py after

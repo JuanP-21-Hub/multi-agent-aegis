@@ -8,3 +8,5 @@ node_modules/
 *.dump
 *.bak
 test-results/
+/banking/logs/
+__pycache__/

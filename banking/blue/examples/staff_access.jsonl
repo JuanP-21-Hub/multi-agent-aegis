@@ -1,0 +1,6 @@
+{"timestamp":"2026-01-01T09:00:01+00:00","path":"/api/staff/customers","method":"GET","status":200,"auth_role":"STAFF","required_role":"STAFF_OR_ADMIN","authz_decision":"allowed"}
+{"timestamp":"2026-01-01T09:00:02+00:00","path":"/api/staff/customers","method":"GET","status":403,"auth_role":"CUSTOMER","required_role":"STAFF_OR_ADMIN","authz_decision":"denied"}
+{"timestamp":"2026-01-01T09:00:03+00:00","path":"/api/customers/me","method":"GET","status":200,"auth_role":"CUSTOMER","required_role":"CUSTOMER","authz_decision":"allowed"}
+{"timestamp":"2026-01-01T09:00:04+00:00","path":"/api/staff/customers/{customer_id}","method":"GET","status":200,"auth_role":"STAFF","required_role":"STAFF_OR_ADMIN","authz_decision":"allowed"}
+{"timestamp":"2026-01-01T09:00:05+00:00","path":"/api/staff/customers/{customer_id}","method":"GET","status":403,"auth_role":"CUSTOMER","required_role":"STAFF_OR_ADMIN","authz_decision":"denied"}
+{"timestamp":"2026-01-01T09:00:06+00:00","path":"/api/customers/me","method":"GET","status":200,"auth_role":"CUSTOMER","required_role":"CUSTOMER","authz_decision":"allowed"}

@@ -23,7 +23,7 @@ services:
       PGPASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
     volumes:
       - ./database/migrations:/migrations:ro
-    command: ["psql", "-v", "ON_ERROR_STOP=1", "-f", "/migrations/001_integration.sql"]
+    command: ["psql", "-v", "ON_ERROR_STOP=1", "-f", "/migrations/001_integration.sql", "-f", "/migrations/002_finlab_blue.sql"]
     depends_on:
       database:
         condition: service_healthy
@@ -65,4 +65,3 @@ networks:
   client_local:
 volumes:
   bank_data:
-

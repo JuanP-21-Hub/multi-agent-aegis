@@ -1,10 +1,14 @@
 
+import argparse
 import getpass
 
 from app.main import get_db, password_hasher
 
 
 def main():
+    parser = argparse.ArgumentParser(description="로컬 은행 직원 계정 생성")
+    parser.add_argument("--role", choices=("STAFF", "ADMIN"), default="STAFF")
+    role = parser.parse_args().role
     employee_id = input("직원 아이디: ").strip()
     display_name = input("직원 이름: ").strip()
 
@@ -31,11 +35,11 @@ def main():
                 """
                 INSERT INTO staff_users
                 (employee_id, password_hash, display_name, role)
-                VALUES (%s, %s, %s, 'STAFF')
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT (employee_id) DO NOTHING
                 RETURNING id
                 """,
-                (employee_id, hashed_password, display_name)
+                (employee_id, hashed_password, display_name, role)
             )
             result = cur.fetchone()
 

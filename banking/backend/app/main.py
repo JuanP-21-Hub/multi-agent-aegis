@@ -196,6 +196,7 @@ def get_current_customer(
     = Depends(bearer_scheme)
 ):
 
+    request.state.required_role = getattr(request.state, "required_role", "CUSTOMER")
     if credentials is None:
         raise authentication_error()
 
@@ -248,6 +249,7 @@ def get_current_customer(
 
     request.state.actor_type = "CUSTOMER"
     request.state.actor_id = customer_id
+    request.state.role_checked = True
 
     return {
         "customer_id": customer[0],
@@ -537,6 +539,7 @@ def get_current_staff(
     credentials: HTTPAuthorizationCredentials | None
     = Depends(bearer_scheme)
 ):
+    request.state.required_role = getattr(request.state, "required_role", "STAFF_OR_ADMIN")
     if credentials is None:
         raise authentication_error()
 
@@ -588,6 +591,7 @@ def get_current_staff(
 
     request.state.actor_type = staff[2]
     request.state.actor_id = staff[0]
+    request.state.role_checked = True
     return {
         "display_name": staff[5],
         "active": staff[3],
@@ -815,4 +819,3 @@ def staff_customer_accounts(
 # Integrated A2D UI APIs and request auditing.
 from app.extensions import install
 install(app)
-

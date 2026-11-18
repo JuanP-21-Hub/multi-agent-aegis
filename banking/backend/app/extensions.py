@@ -16,6 +16,7 @@ from psycopg.rows import dict_row
 from starlette.concurrency import run_in_threadpool
 
 from app import main as core
+from app.transactions import install_transactions
 
 LAB_MODE = os.getenv('LAB_MODE', 'fixed')
 if LAB_MODE not in ('fixed', 'vulnerable'):
@@ -59,11 +60,21 @@ def persist_audit(record):
     with core.get_db() as conn, conn.cursor() as cur:
         cur.execute('''INSERT INTO audit_logs
             (actor_type, actor_id, action, target_type, target_id, request_path,
-             ip_address, status, request_id, http_method, http_status, duration_ms)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''', record)
+             ip_address, status, request_id, http_method, http_status, duration_ms, details)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)''', record)
+
+
+def current_admin(request: Request, credentials=Depends(core.bearer_scheme)):
+    request.state.required_role = 'ADMIN'
+    staff = core.get_current_staff(request, credentials)
+    if staff['role'] != 'ADMIN':
+        raise HTTPException(403, '관리자 전용 기능입니다.')
+    return staff
 
 
 def install(app):
+    install_transactions(app, core)
+
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
         # Pydantic's default response echoes input, including passwords and RRN.
@@ -91,6 +102,12 @@ def install(app):
             # Do not print exception locals, request bodies, headers or SQL parameters.
             logging.error('Unhandled API error request_id=%s', rid)
             response = JSONResponse(status_code=500, content={'detail': '서버 오류가 발생했습니다.'})
+        required_role = getattr(request.state, 'required_role', None)
+        decision = getattr(request.state, 'owner_decision', None)
+        if required_role and response.status_code in (401, 403) and decision is None:
+            decision = 'denied'
+        elif required_role in ('CUSTOMER', 'STAFF_OR_ADMIN', 'ADMIN') and getattr(request.state, 'role_checked', False):
+            decision = decision or 'allowed'
         if not hasattr(request.state, 'actor_id'):
             # A valid customer denied at a staff endpoint is still an identifiable actor.
             # Revalidate against the DB; never trust unsigned claims for audit identity.
@@ -118,7 +135,8 @@ def install(app):
                   getattr(request.state, 'actor_id', None), 'API_REQUEST', target_type,
                   target_id, path, ip, 'SUCCESS' if response.status_code < 400 else 'FAILURE',
                   rid, request.method[:10], response.status_code,
-                  min(round((time.perf_counter() - started) * 1000), 2147483647))
+                  min(round((time.perf_counter() - started) * 1000), 2147483647),
+                  json.dumps({'required_role': required_role, 'authz_decision': decision}))
         try:
             await run_in_threadpool(persist_audit, record)
             response.headers['X-Audit-Persisted'] = 'true'
@@ -144,8 +162,9 @@ def install(app):
         return {'message': '로그아웃했습니다.'}
 
     @app.post('/api/accounts/{account_id}/verify-pin')
-    def verify_pin(account_id: int, body: core.CreateAccountRequest,
+    def verify_pin(account_id: int, body: core.CreateAccountRequest, request: Request,
                    customer: dict = Depends(core.get_current_customer)):
+        request.state.required_role = 'ACCOUNT_OWNER'
         with core.get_db() as conn, conn.cursor() as cur:
             cur.execute('SELECT account_pin_hash FROM accounts WHERE id = %s AND customer_id = %s',
                         (account_id, customer['customer_id']))
@@ -156,6 +175,7 @@ def install(app):
             core.password_hasher.verify(row[0], body.account_pin)
         except (core.VerificationError, core.InvalidHashError):
             raise HTTPException(403, '계좌 비밀번호가 일치하지 않습니다.')
+        request.state.owner_decision = 'allowed'
         return {'verified': True, 'message': '계좌 비밀번호가 확인되었습니다.'}
 
     @app.get('/api/staff/users')
@@ -214,12 +234,31 @@ def install(app):
     def audit_logs(format: str = Query('json', pattern='^(json|jsonl)$'),
                    before_id: int | None = Query(None, gt=0), limit: int = Query(200, ge=1, le=1000),
                    staff: dict = Depends(core.get_current_staff)):
+        items = read_audit(before_id, limit)
+        if format == 'jsonl':
+            return Response(''.join(json.dumps(i, ensure_ascii=False) + '\n' for i in items),
+                            media_type='application/x-ndjson',
+                            headers={'Content-Disposition': 'attachment; filename=a2d-audit.jsonl'})
+        return {'items': items, 'next_before_id': items[-1]['id'] if len(items) == limit else None}
+
+
+    @app.get('/api/admin/security/events')
+    def security_events(before_id: int | None = Query(None, gt=0),
+                        limit: int = Query(200, ge=1, le=1000),
+                        admin: dict = Depends(current_admin)):
+        items = read_audit(before_id, limit, protected_only=True)
+        return {'items': items, 'next_before_id': items[-1]['id'] if len(items) == limit else None}
+
+    def read_audit(before_id, limit, protected_only=False):
         with core.get_db() as conn, conn.cursor(row_factory=dict_row) as cur:
             # Explicit allowlist: historical details/IP/arbitrary paths are never exported.
             cur.execute('''SELECT id, created_at, actor_type, actor_id, target_type, target_id,
-                           request_id, request_path, http_method, http_status, status, duration_ms
+                           request_id, request_path, http_method, http_status, status, duration_ms,
+                           details ->> 'required_role' AS required_role,
+                           details ->> 'authz_decision' AS authz_decision
                            FROM audit_logs WHERE (%s::bigint IS NULL OR id < %s)
-                           ORDER BY id DESC LIMIT %s''', (before_id, before_id, limit))
+                           AND (NOT %s OR details ->> 'required_role' IS NOT NULL)
+                           ORDER BY id DESC LIMIT %s''', (before_id, before_id, protected_only, limit))
             items = cur.fetchall()
         known_paths = {r.path for r in app.routes}
         for item in items:
@@ -227,8 +266,8 @@ def install(app):
                 item['request_path'] = '/api/legacy-or-unmatched'
             item['created_at'] = item['created_at'].isoformat() if item['created_at'] else None
             item['request_id'] = str(item['request_id']) if item['request_id'] else None
-        if format == 'jsonl':
-            return Response(''.join(json.dumps(i, ensure_ascii=False) + '\n' for i in items),
-                            media_type='application/x-ndjson',
-                            headers={'Content-Disposition': 'attachment; filename=a2d-audit.jsonl'})
-        return {'items': items, 'next_before_id': items[-1]['id'] if len(items) == limit else None}
+            if item['required_role'] not in ('CUSTOMER', 'STAFF_OR_ADMIN', 'ADMIN', 'ACCOUNT_OWNER'):
+                item['required_role'] = None
+            if item['authz_decision'] not in ('allowed', 'denied'):
+                item['authz_decision'] = None
+        return items
